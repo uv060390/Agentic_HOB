@@ -3,8 +3,8 @@ analyzer.py – Creative analysis via Claude Vision (images) and
               OpenAI Whisper (video / UGC audio transcripts).
 
 Required env vars:
-  ANTHROPIC_API_KEY  – Claude API key
-  OPENAI_API_KEY     – OpenAI API key (for Whisper)
+  ANTHROPIC_VISION_API_KEY  – Claude API key (scoped name to avoid confusion with other Anthropic keys)
+  OPENAI_API_KEY            – OpenAI API key (for Whisper)
 """
 
 import base64
@@ -64,7 +64,7 @@ class CreativeAnalyzer:
         max_image_bytes: int = 5 * 1024 * 1024,  # 5 MB
     ):
         self._claude = anthropic.Anthropic(
-            api_key=anthropic_api_key or os.environ["ANTHROPIC_API_KEY"]
+            api_key=anthropic_api_key or os.environ["ANTHROPIC_VISION_API_KEY"]
         )
         openai.api_key = openai_api_key or os.environ["OPENAI_API_KEY"]
         self.max_image_bytes = max_image_bytes
