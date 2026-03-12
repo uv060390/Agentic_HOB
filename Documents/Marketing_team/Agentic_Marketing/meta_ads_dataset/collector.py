@@ -1,27 +1,24 @@
 """
-collector.py – Fetch Meta Ad Library creatives for a list of keywords.
+collector.py – Fetch Meta Ad Library creatives via the Apify platform.
 
-Uses the Meta Ad Library API:
-  https://www.facebook.com/ads/library/api/
+Uses the Apify Meta Ads Scraper actor (curious_coder/facebook-ads-library-scraper)
+via the apify-client Python SDK.  This replaces direct Meta Ad Library API calls
+so that proxy rotation and DOM-obfuscation bypass are handled by Apify.
 
 Required env vars:
-  META_ACCESS_TOKEN  – a valid Facebook user/app access token with
-                       ads_read permission.
+  APIFY_API_TOKEN  – Apify API token (https://console.apify.com/account/integrations)
 """
 
 import os
-import time
 import logging
 from typing import Optional
 from dataclasses import dataclass, field
 
-import requests
+from apify_client import ApifyClient
 
 logger = logging.getLogger(__name__)
 
-META_AD_LIBRARY_URL = "https://graph.facebook.com/v19.0/ads_archive"
-
-AD_FORMATS = ["IMAGE", "VIDEO", "MEME", "CAROUSEL"]
+ACTOR_ID = "curious_coder/facebook-ads-library-scraper"
 
 
 @dataclass
@@ -44,44 +41,41 @@ class RawAd:
     publisher_platforms: list[str]
     ad_format: str               # IMAGE | VIDEO | MEME | CAROUSEL
     keywords_matched: list[str] = field(default_factory=list)
+    # Raw downloadable media URLs (.mp4 or .jpg) — NOT HTML snapshot links
     media_urls: list[str] = field(default_factory=list)
 
 
-class MetaAdsCollector:
+class ApifyMetaAdsCollector:
     """
-    Fetches ads from the Meta Ad Library API for given keywords.
+    Fetches ads from the Meta Ad Library via Apify's scraper actor.
+
+    Apify handles proxy rotation and Meta's DOM obfuscation so we get
+    raw, downloadable media URLs (.mp4 / .jpg) directly.
 
     Parameters
     ----------
-    access_token : str, optional
-        Falls back to META_ACCESS_TOKEN env var.
+    apify_api_token : str, optional
+        Falls back to APIFY_API_TOKEN env var.
     ad_reached_countries : list[str]
-        ISO-3166 country codes to scope the search (default: ["US"]).
+        ISO-3166 country codes (default: ["US"]).
     ad_active_status : str
         "ALL" | "ACTIVE" | "INACTIVE" (default: "ALL").
-    limit : int
-        Max ads per keyword page request (capped at 1 000 by Meta).
-    max_pages : int
-        Max pagination pages to follow per keyword (0 = unlimited).
-    request_delay : float
-        Seconds to sleep between API calls to stay within rate limits.
+    max_ads_per_keyword : int
+        Cap on ads retrieved per keyword (default: 200).
     """
 
     def __init__(
         self,
-        access_token: Optional[str] = None,
+        apify_api_token: Optional[str] = None,
         ad_reached_countries: Optional[list[str]] = None,
         ad_active_status: str = "ALL",
-        limit: int = 500,
-        max_pages: int = 5,
-        request_delay: float = 1.0,
+        max_ads_per_keyword: int = 200,
     ):
-        self.access_token = access_token or os.environ["META_ACCESS_TOKEN"]
+        token = apify_api_token or os.environ["APIFY_API_TOKEN"]
+        self._client = ApifyClient(token)
         self.ad_reached_countries = ad_reached_countries or ["US"]
         self.ad_active_status = ad_active_status
-        self.limit = min(limit, 1000)
-        self.max_pages = max_pages
-        self.request_delay = request_delay
+        self.max_ads_per_keyword = max_ads_per_keyword
 
     # ------------------------------------------------------------------
     # Public API
@@ -91,8 +85,8 @@ class MetaAdsCollector:
         """Return a deduplicated list of RawAd objects across all keywords."""
         seen: dict[str, RawAd] = {}
         for kw in keywords:
-            logger.info("Fetching Meta ads for keyword: %s", kw)
-            for ad in self._paginate(kw):
+            logger.info("Running Apify actor for keyword: %s", kw)
+            for ad in self._run_actor(kw):
                 if ad.ad_id not in seen:
                     seen[ad.ad_id] = ad
                 else:
@@ -103,79 +97,51 @@ class MetaAdsCollector:
     # Private helpers
     # ------------------------------------------------------------------
 
-    def _paginate(self, keyword: str):
-        params = self._base_params(keyword)
-        pages_fetched = 0
-        url = META_AD_LIBRARY_URL
-
-        while url:
-            resp = requests.get(url, params=params, timeout=30)
-            resp.raise_for_status()
-            data = resp.json()
-
-            for raw in data.get("data", []):
-                yield self._parse(raw, keyword)
-
-            pages_fetched += 1
-            next_cursor = data.get("paging", {}).get("next")
-            if not next_cursor or (self.max_pages and pages_fetched >= self.max_pages):
-                break
-
-            # Subsequent requests use the full next URL from the cursor
-            url = next_cursor
-            params = {}  # params are embedded in the cursor URL
-            time.sleep(self.request_delay)
-
-    def _base_params(self, keyword: str) -> dict:
-        return {
-            "access_token": self.access_token,
-            "ad_type": "POLITICAL_AND_ISSUE_ADS",  # use "ALL" for non-political
-            "ad_reached_countries": self.ad_reached_countries,
-            "search_terms": keyword,
-            "ad_active_status": self.ad_active_status,
-            "fields": ",".join([
-                "id",
-                "page_id",
-                "page_name",
-                "ad_creative_bodies",
-                "ad_creative_link_captions",
-                "ad_creative_link_titles",
-                "ad_snapshot_url",
-                "ad_delivery_start_time",
-                "ad_delivery_stop_time",
-                "currency",
-                "spend",
-                "impressions",
-                "demographic_distribution",
-                "region_distribution",
-                "languages",
-                "publisher_platforms",
-            ]),
-            "limit": self.limit,
+    def _run_actor(self, keyword: str):
+        """Trigger the Apify actor and yield parsed RawAd objects."""
+        run_input = {
+            "searchTerms": [keyword],
+            "adReachedCountries": self.ad_reached_countries,
+            "adActiveStatus": self.ad_active_status,
+            "maxResults": self.max_ads_per_keyword,
+            "scrapeAdDetails": True,   # navigate snapshot URL → raw media URLs
         }
 
+        run = self._client.actor(ACTOR_ID).call(run_input=run_input)
+        dataset_id = run.get("defaultDatasetId")
+        if not dataset_id:
+            logger.warning("No dataset returned for keyword: %s", keyword)
+            return
+
+        items = self._client.dataset(dataset_id).iterate_items()
+        for item in items:
+            try:
+                yield self._parse(item, keyword)
+            except Exception as exc:
+                logger.warning("Failed to parse ad item: %s – %s", item.get("adArchiveID"), exc)
+
     @staticmethod
-    def _parse(raw: dict, keyword: str) -> RawAd:
+    def _parse(item: dict, keyword: str) -> RawAd:
         return RawAd(
-            ad_id=raw.get("id", ""),
-            page_id=raw.get("page_id", ""),
-            page_name=raw.get("page_name", ""),
-            ad_creative_bodies=raw.get("ad_creative_bodies") or [],
-            ad_creative_link_captions=raw.get("ad_creative_link_captions") or [],
-            ad_creative_link_titles=raw.get("ad_creative_link_titles") or [],
-            ad_snapshot_url=raw.get("ad_snapshot_url", ""),
-            ad_delivery_start_time=raw.get("ad_delivery_start_time", ""),
-            ad_delivery_stop_time=raw.get("ad_delivery_stop_time"),
-            currency=raw.get("currency", ""),
-            spend=raw.get("spend") or {},
-            impressions=raw.get("impressions") or {},
-            demographic_distribution=raw.get("demographic_distribution") or [],
-            region_distribution=raw.get("region_distribution") or [],
-            languages=raw.get("languages") or [],
-            publisher_platforms=raw.get("publisher_platforms") or [],
-            ad_format=_infer_format(raw),
+            ad_id=str(item.get("adArchiveID") or item.get("id", "")),
+            page_id=str(item.get("pageID") or item.get("page_id", "")),
+            page_name=item.get("pageName") or item.get("page_name", ""),
+            ad_creative_bodies=item.get("adCreativeBodies") or item.get("ad_creative_bodies") or [],
+            ad_creative_link_captions=item.get("adCreativeLinkCaptions") or item.get("ad_creative_link_captions") or [],
+            ad_creative_link_titles=item.get("adCreativeLinkTitles") or item.get("ad_creative_link_titles") or [],
+            ad_snapshot_url=item.get("snapshotUrl") or item.get("ad_snapshot_url", ""),
+            ad_delivery_start_time=item.get("startDate") or item.get("ad_delivery_start_time", ""),
+            ad_delivery_stop_time=item.get("endDate") or item.get("ad_delivery_stop_time"),
+            currency=item.get("currency", ""),
+            spend=_parse_range(item.get("spend")),
+            impressions=_parse_range(item.get("impressions")),
+            demographic_distribution=item.get("demographicDistribution") or item.get("demographic_distribution") or [],
+            region_distribution=item.get("regionDistribution") or item.get("region_distribution") or [],
+            languages=item.get("languages") or [],
+            publisher_platforms=item.get("publisherPlatforms") or item.get("publisher_platforms") or [],
+            ad_format=_infer_format(item),
             keywords_matched=[keyword],
-            media_urls=_extract_media_urls(raw),
+            media_urls=_extract_raw_media_urls(item),
         )
 
 
@@ -183,21 +149,66 @@ class MetaAdsCollector:
 # Helpers
 # ------------------------------------------------------------------
 
-def _infer_format(raw: dict) -> str:
-    """Best-effort format inference from the ad_snapshot_url / bodies."""
-    snapshot = raw.get("ad_snapshot_url", "").lower()
-    if "carousel" in snapshot:
+def _parse_range(value) -> dict:
+    """Normalise spend/impressions into {lower_bound, upper_bound} dict."""
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        # e.g. "1000-4999"
+        parts = value.split("-")
+        if len(parts) == 2:
+            return {"lower_bound": parts[0], "upper_bound": parts[1]}
+    return {}
+
+
+def _infer_format(item: dict) -> str:
+    """Infer ad format from Apify actor output."""
+    # Actor may return explicit format field
+    fmt = (item.get("adFormat") or item.get("ad_format") or "").upper()
+    if fmt in ("IMAGE", "VIDEO", "CAROUSEL", "MEME"):
+        return fmt
+
+    videos = item.get("videos") or []
+    images = item.get("images") or []
+    if videos:
+        return "VIDEO"
+    if len(images) > 1:
         return "CAROUSEL"
-    # Heuristic: multiple bodies typically means carousel
-    bodies = raw.get("ad_creative_bodies") or []
-    if len(bodies) > 1:
-        return "CAROUSEL"
-    # The Ad Library API doesn't expose format directly for non-political ads;
-    # in a production integration you'd call the creative detail endpoint.
+    if images:
+        return "IMAGE"
     return "IMAGE"
 
 
-def _extract_media_urls(raw: dict) -> list[str]:
-    """Placeholder – real implementation would call the snapshot API."""
-    snapshot = raw.get("ad_snapshot_url")
-    return [snapshot] if snapshot else []
+def _extract_raw_media_urls(item: dict) -> list[str]:
+    """
+    Extract raw downloadable media URLs (.mp4 / .jpg) from the Apify output.
+
+    Apify's scraper navigates the ad_snapshot_url and returns actual media
+    assets rather than the HTML snapshot link — which AI APIs cannot process.
+    """
+    urls: list[str] = []
+
+    # Video URLs (prefer HD, fall back to SD)
+    for video in item.get("videos") or []:
+        url = video.get("videoHdUrl") or video.get("videoSdUrl") or video.get("videoPrvUrl")
+        if url:
+            urls.append(url)
+
+    # Image URLs
+    for image in item.get("images") or []:
+        url = image.get("resizedImageUrl") or image.get("originalImageUrl")
+        if url:
+            urls.append(url)
+
+    # Carousel cards
+    for card in item.get("cards") or []:
+        for image in card.get("images") or []:
+            url = image.get("resizedImageUrl") or image.get("originalImageUrl")
+            if url:
+                urls.append(url)
+        for video in card.get("videos") or []:
+            url = video.get("videoHdUrl") or video.get("videoSdUrl")
+            if url:
+                urls.append(url)
+
+    return urls

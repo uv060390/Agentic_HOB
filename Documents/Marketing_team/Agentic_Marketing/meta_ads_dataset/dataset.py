@@ -11,17 +11,18 @@ Usage
         ad_reached_countries=["US", "GB"],
     )
     df.to_csv("meta_ads_competitor_creatives.csv", index=False)
-    df.to_parquet("meta_ads_competitor_creatives.parquet")
+    ds.push_to_supabase(df, table="meta_ads_creatives")
 """
 
 import logging
+import os
 from typing import Optional
 
 import pandas as pd
 from tqdm import tqdm
 
 from .analyzer import CreativeAnalyzer
-from .collector import MetaAdsCollector, RawAd
+from .collector import ApifyMetaAdsCollector, RawAd
 from .features import build_features
 
 logger = logging.getLogger(__name__)
@@ -30,14 +31,15 @@ logger = logging.getLogger(__name__)
 class MetaAdsDataset:
     """
     End-to-end pipeline that:
-      1. Fetches competitor ads from the Meta Ad Library by keyword
+      1. Fetches competitor ads via the Apify Meta Ads Scraper actor
       2. Analyses each creative with Claude Vision + Whisper
-      3. Engineers a feature set per ad
+      3. Engineers a feature set per ad (including ``days_active`` ML target)
       4. Returns a single enriched Pandas DataFrame
+      5. Can push the dataset to Supabase
 
     Parameters
     ----------
-    collector : MetaAdsCollector, optional
+    collector : ApifyMetaAdsCollector, optional
         Custom collector; built with defaults if omitted.
     analyzer : CreativeAnalyzer, optional
         Custom analyzer; built with defaults if omitted.
@@ -49,12 +51,12 @@ class MetaAdsDataset:
 
     def __init__(
         self,
-        collector: Optional[MetaAdsCollector] = None,
+        collector: Optional[ApifyMetaAdsCollector] = None,
         analyzer: Optional[CreativeAnalyzer] = None,
         analyse_creatives: bool = True,
         max_ads: Optional[int] = None,
     ):
-        self.collector = collector or MetaAdsCollector()
+        self.collector = collector or ApifyMetaAdsCollector()
         self.analyzer = analyzer or (CreativeAnalyzer() if analyse_creatives else None)
         self.analyse_creatives = analyse_creatives and self.analyzer is not None
         self.max_ads = max_ads
@@ -74,19 +76,19 @@ class MetaAdsDataset:
         Parameters
         ----------
         keywords : list[str]
-            Industry-trend keywords to search (e.g. ["SPF 50", "vegan protein"]).
+            Industry-trend keywords (e.g. ["SPF 50", "vegan protein"]).
         ad_reached_countries : list[str], optional
             Override the collector's country scope for this run.
 
         Returns
         -------
         pd.DataFrame
-            One row per ad, with all engineered features as columns.
+            One row per ad.  ``days_active`` is the ML target variable.
         """
         if ad_reached_countries:
             self.collector.ad_reached_countries = ad_reached_countries
 
-        logger.info("Step 1/3 – Collecting ads for %d keywords …", len(keywords))
+        logger.info("Step 1/3 – Collecting ads for %d keywords via Apify …", len(keywords))
         raw_ads: list[RawAd] = self.collector.fetch_by_keywords(keywords)
 
         if self.max_ads:
@@ -117,16 +119,53 @@ class MetaAdsDataset:
         logger.info("Dataset ready: %d rows × %d columns", *df.shape)
         return df
 
+    def push_to_supabase(self, df: pd.DataFrame, table: str = "meta_ads_creatives") -> None:
+        """
+        Upload the dataset to a Supabase table.
+
+        Requires env vars: SUPABASE_URL and SUPABASE_KEY.
+        The DataFrame index (ad_id) is reset to a column before upload.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            Enriched dataset returned by ``build()``.
+        table : str
+            Target Supabase table name.
+        """
+        try:
+            from supabase import create_client
+        except ImportError as exc:
+            raise ImportError("Install supabase-py: pip install supabase") from exc
+
+        url = os.environ.get("SUPABASE_URL") or os.environ.get("supabase_url")
+        key = os.environ.get("SUPABASE_KEY") or os.environ.get("supabase_key")
+        if not url or not key:
+            raise EnvironmentError("SUPABASE_URL and SUPABASE_KEY must be set.")
+
+        client = create_client(url, key)
+
+        records = df.reset_index().to_dict(orient="records")
+        # Supabase upsert in batches of 500
+        batch_size = 500
+        for i in range(0, len(records), batch_size):
+            batch = records[i : i + batch_size]
+            client.table(table).upsert(batch).execute()
+            logger.info("Pushed rows %d–%d to Supabase table '%s'", i, i + len(batch), table)
+
+        logger.info("Supabase upload complete: %d rows → '%s'", len(records), table)
+
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
 
     @staticmethod
     def _post_process(df: pd.DataFrame) -> pd.DataFrame:
-        """Sort columns and set the ad_id as the index."""
+        """Sort columns – ``days_active`` first as the ML target."""
         if df.empty:
             return df
 
+        target_cols = ["days_active"]
         meta_cols = ["ad_id", "page_id", "page_name", "ad_format", "keywords_matched"]
         perf_cols = [c for c in df.columns if c.startswith(("spend_", "impressions_", "estimated_"))]
         format_cols = [c for c in df.columns if c.startswith("format_")]
@@ -137,11 +176,14 @@ class MetaAdsDataset:
             "keywords_matched_count", "publisher_platform_count",
         )]
         demo_cols = [c for c in df.columns if c.startswith("demo_")]
-        temporal_cols = [c for c in df.columns if c in ("flight_days", "days_since_start", "is_active")]
+        temporal_cols = [c for c in df.columns if c in (
+            "flight_days", "days_since_start", "is_active", "last_checked_at"
+        )]
         other_cols = [c for c in df.columns if c not in (
-            meta_cols + perf_cols + format_cols + vision_cols + text_cols + demo_cols + temporal_cols
+            target_cols + meta_cols + perf_cols + format_cols + vision_cols
+            + text_cols + demo_cols + temporal_cols
         )]
 
-        ordered = meta_cols + perf_cols + format_cols + vision_cols + text_cols + demo_cols + temporal_cols + other_cols
+        ordered = target_cols + meta_cols + perf_cols + format_cols + vision_cols + text_cols + demo_cols + temporal_cols + other_cols
         ordered = [c for c in ordered if c in df.columns]
         return df[ordered].set_index("ad_id")

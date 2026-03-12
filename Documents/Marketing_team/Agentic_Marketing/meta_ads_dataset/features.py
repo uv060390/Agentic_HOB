@@ -171,19 +171,30 @@ def _demographic_features(ad: RawAd) -> dict:
 
 
 def _temporal_features(ad: RawAd) -> dict:
-    """Flight duration and recency features."""
+    """
+    Flight duration and recency features.
+
+    ``days_active`` is the primary ML target variable ($y$): the number of days
+    the ad has been or was live.  A higher value indicates a winning ad that
+    the competitor kept running profitably.  For still-active ads the counter
+    continues to increment on each 48-hour re-check run.
+    """
     now = datetime.now(tz=timezone.utc)
     start = _parse_date(ad.ad_delivery_start_time)
     stop = _parse_date(ad.ad_delivery_stop_time) if ad.ad_delivery_stop_time else now
 
-    flight_days = (stop - start).days if start else None
-    days_since_start = (now - start).days if start else None
     is_active = int(ad.ad_delivery_stop_time is None)
+    days_active = (stop - start).days if start else None
+    days_since_start = (now - start).days if start else None
 
     return {
-        "flight_days": flight_days,
+        # ML target variable — "Days Active" proxy for winning ad performance
+        "days_active": days_active,
+        # Legacy alias kept for backwards compatibility
+        "flight_days": days_active,
         "days_since_start": days_since_start,
         "is_active": is_active,
+        "last_checked_at": now.isoformat(),
     }
 
 
