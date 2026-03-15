@@ -129,6 +129,11 @@ class AgentConfig(TimestampMixin, Base):
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     config_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    # Week 2 additions
+    agent_template: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    reports_to_slug: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    is_paused: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_specialist: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     company: Mapped["Company"] = relationship(back_populates="agent_configs")
 
@@ -166,6 +171,8 @@ class AuditEntry(TimestampMixin, Base):
     )
     # Trace: which task/project/mission this action serves
     goal_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    # Week 2: rollback marker — set True by governance.rollback(); original row stays immutable
+    is_rolled_back: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     company: Mapped["Company"] = relationship(back_populates="audit_entries")
     ticket: Mapped[Optional["Ticket"]] = relationship(back_populates="audit_entries")
@@ -240,6 +247,11 @@ class Ticket(TimestampMixin, Base):
     parent_ticket_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("ticket.id"), nullable=True
     )
+    # Week 2 additions
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    task_type: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    resolution: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    project_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
     company: Mapped["Company"] = relationship(back_populates="tickets")
     audit_entries: Mapped[list["AuditEntry"]] = relationship(back_populates="ticket")

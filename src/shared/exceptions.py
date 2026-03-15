@@ -110,3 +110,44 @@ class ToolExecutionError(BrandOSError):
     def __init__(self, tool_slug: str, detail: str) -> None:
         self.tool_slug = tool_slug
         super().__init__(f"Tool '{tool_slug}' execution failed: {detail}")
+
+
+# ── Agent / Company ───────────────────────────────────────────────────────────
+
+
+class CompanyNotFoundError(BrandOSError):
+    def __init__(self, slug: str) -> None:
+        self.slug = slug
+        super().__init__(f"Company not found: '{slug}'.")
+
+
+class AgentNotFoundError(BrandOSError):
+    def __init__(self, agent_slug: str, company_slug: str) -> None:
+        self.agent_slug = agent_slug
+        self.company_slug = company_slug
+        super().__init__(f"Agent '{agent_slug}' not found for brand '{company_slug}'.")
+
+
+class TicketNotFoundError(BrandOSError):
+    def __init__(self, ticket_id: str) -> None:
+        self.ticket_id = ticket_id
+        super().__init__(f"Ticket not found: '{ticket_id}'.")
+
+
+class GovernanceError(BrandOSError):
+    """Raised for invalid governance state transitions or unauthorized actions."""
+
+
+class AgentWindDownError(BrandOSError):
+    def __init__(self, agent_slug: str) -> None:
+        super().__init__(f"Agent '{agent_slug}' has been wound down and cannot execute tasks.")
+
+
+class AgentPausedError(BrandOSError):
+    def __init__(self, agent_slug: str) -> None:
+        super().__init__(f"Agent '{agent_slug}' is paused. Resume via governance before running tasks.")
+
+
+class ImmutableAuditError(BrandOSError):
+    def __init__(self, entry_id: str) -> None:
+        super().__init__(f"Audit entry '{entry_id}' is already rolled back and cannot be modified.")
