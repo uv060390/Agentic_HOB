@@ -10,16 +10,36 @@ from src.shared.exceptions import AgentNotFoundError, CompanyNotFoundError
 from src.agents.base_agent import BaseAgent
 from src.agents.templates.ceo import CEOAgent
 from src.agents.templates.finance import FinanceAgent
+from src.agents.templates.scout import ScoutAgent
+from src.agents.templates.cmo import CMOAgent
+from src.agents.templates.creative import CreativeAgent
+from src.agents.templates.performance import PerformanceAgent
+from src.agents.templates.ops import OpsAgent
+from src.agents.holdco.portfolio_cfo import PortfolioCFOAgent
+from src.agents.holdco.bd_agent import BDAgent
 from src.agents.specialists.data_scientist import DataScientistAgent
 from src.agents.specialists.engineer import EngineerAgent
 from src.agents.specialists.data_analyst import DataAnalystAgent
+from src.agents.specialists.optimizer import OptimizerAgent
+from src.agents.specialists.seo_aeo import SEOAEOAgent
+from src.agents.specialists.growth_hacker import GrowthHackerAgent
 
 _TEMPLATE_REGISTRY: dict[str, type[BaseAgent]] = {
     "ceo": CEOAgent,
     "finance": FinanceAgent,
+    "scout": ScoutAgent,
+    "cmo": CMOAgent,
+    "creative": CreativeAgent,
+    "performance": PerformanceAgent,
+    "ops": OpsAgent,
+    "portfolio_cfo": PortfolioCFOAgent,
+    "bd": BDAgent,
     "data_scientist": DataScientistAgent,
     "engineer": EngineerAgent,
     "data_analyst": DataAnalystAgent,
+    "optimizer": OptimizerAgent,
+    "seo_aeo": SEOAEOAgent,
+    "growth_hacker": GrowthHackerAgent,
 }
 
 

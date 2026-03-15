@@ -27,10 +27,24 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Startup and shutdown lifecycle hook."""
     settings = get_settings()
 
-    # Startup
+    # Startup — start heartbeat scheduler
+    import logging
+    logger = logging.getLogger(__name__)
+    try:
+        from src.core.heartbeat import start_scheduler, stop_scheduler
+        await start_scheduler()
+        logger.info("Heartbeat scheduler started")
+    except Exception as exc:
+        logger.warning("Heartbeat scheduler failed to start: %s", exc)
+
     yield
 
-    # Shutdown — dispose DB connection pool
+    # Shutdown — stop scheduler and dispose DB connection pool
+    try:
+        from src.core.heartbeat import stop_scheduler
+        await stop_scheduler()
+    except Exception:
+        pass
     await close_engine()
 
 
@@ -74,6 +88,20 @@ def create_app() -> FastAPI:
                 db=db_status,
             )
         )
+
+    # ── Mount route modules ──────────────────────────────────────────────────
+    from src.gateway.routes.whatsapp import router as whatsapp_router
+    from src.gateway.routes.telegram import router as telegram_router
+
+    app.include_router(whatsapp_router)
+    app.include_router(telegram_router)
+
+    # Mount onboarding routes if available
+    try:
+        from src.gateway.routes.onboarding import router as onboarding_router
+        app.include_router(onboarding_router)
+    except ImportError:
+        pass
 
     return app
 
