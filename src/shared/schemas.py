@@ -138,3 +138,36 @@ class OrgChartSchema(BaseModel):
     standing_agents: list[dict] = Field(default_factory=list)
     active_specialists: list[dict] = Field(default_factory=list)
     reporting_lines: dict[str, list[str]] = Field(default_factory=dict)
+
+
+class WorkflowStepResult(BaseModel):
+    step: int
+    agent: str
+    task_subtype: str
+    success: bool
+    output: str
+
+
+class WorkflowRunResult(BaseModel):
+    run_id: str
+    workflow_name: str
+    company_slug: str
+    status: str
+    parent_ticket_id: str | None = None
+    step_outputs: list[WorkflowStepResult] = Field(default_factory=list)
+    started_at: str
+    completed_at: str | None = None
+    error: str | None = None
+
+
+class CreativeLibraryEntry(BaseModel):
+    creative_id: str
+    brand_slug: str
+    source: str  # "competitor" | "original"
+    competitor_brand: str | None = None
+    predicted_ctr: float | None = None
+    actual_ctr: float | None = None
+    creative_type: str = "image"
+    file_url: str
+    created_by_agent: str
+    workflow_run_id: str | None = None

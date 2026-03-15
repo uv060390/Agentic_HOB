@@ -151,3 +151,11 @@ class AgentPausedError(BrandOSError):
 class ImmutableAuditError(BrandOSError):
     def __init__(self, entry_id: str) -> None:
         super().__init__(f"Audit entry '{entry_id}' is already rolled back and cannot be modified.")
+
+
+class WorkflowError(BrandOSError):
+    """Raised when a workflow step fails or an unknown workflow is requested."""
+
+
+class CreativeLibraryError(BrandOSError):
+    """Raised when Creative Library read/write fails."""
