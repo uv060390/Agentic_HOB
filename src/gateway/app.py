@@ -17,6 +17,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
+from src.gateway.routes.onboarding import router as onboarding_router
 from src.shared.config import get_settings
 from src.shared.db import close_engine, get_db
 from src.shared.schemas import ApiResponse, HealthResponse
@@ -53,6 +54,9 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # ── Routers ────────────────────────────────────────────────────────────────
+    app.include_router(onboarding_router)
 
     # ── Health endpoint (no auth required) ────────────────────────────────────
 

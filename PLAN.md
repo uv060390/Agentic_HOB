@@ -83,6 +83,20 @@ Jira tickets: AM-98 through AM-106.
 - [x] **AM-105** — Write `scripts/seed_apify_tool_config.py` — idempotent seeder for Apify Facebook Ads Library custom adapter config for AIM brand (`tool_slug: apify_fb_ads`)
 - [x] **AM-106** — Write `tests/integration/test_workflow_orchestration.py` — 14 async tests covering workflow registry, step chaining, failure propagation, delegate brand isolation, Creative Library, and OptimizerAgent lifecycle
 
+### Week 2.7 — Onboarding Wizard
+
+Goal: A new founder can message the bot on WhatsApp or Telegram and be walked through full BrandOS setup in a single conversation — brand basics, LLM keys, messaging, tools, budget caps, and auto-provisioning. No manual VPS access required.
+
+Jira tickets: AM-107 through AM-113.
+
+- [x] **AM-107** — Build `src/core/onboarding.py` — persistent, resumable onboarding state machine backed by `onboarding_session` table. `OnboardingStep` dataclasses, 30+ step definitions, `process_input()` core step engine, all validators (with live API test calls), auto-actions (`auto_register_telegram_webhook`, `auto_register_whatsapp_webhook`, `run_auto_provision`), dynamic tool credential queue, prompt formatter
+- [x] **AM-108** — Build `src/gateway/routes/onboarding.py` — FastAPI route handler: `POST /api/v1/onboarding/message`, `GET /api/v1/onboarding/status/{founder_id}`, `POST /api/v1/onboarding/reset/{founder_id}`. DB helpers for session get/create/update (raw SQL). `format_for_channel()` (WhatsApp vs Telegram), `_progress_line()`, `is_onboarding_complete()` / `needs_onboarding()` for intent router integration. Registered in `app.py`.
+- [x] **AM-109** — Write `tests/unit/test_onboarding.py` — 35+ async tests: step registry, tool queue, progress counting, config application, validators, process_input step machine, secret routing (Vault not DB), auto-step execution, injection detection, optional step skip, format helpers, next-step routing, `needs_onboarding()` DB helper
+- [x] **AM-110** — Write Alembic migration `004_onboarding.py` — creates `onboarding_session` table with `founder_id`, `channel`, `status`, `current_step_id`, `completed_steps` (JSON), `collected_config` (JSON), `pending_tool_steps` (JSON), `company_id`, `error_message`, `last_message_at`; indexes on `founder_id`, `status`, `channel`
+- [x] **AM-111** — Add `OnboardingError` and `StepValidationError` to `src/shared/exceptions.py`
+- [x] **AM-112** — Add `set_brand_secret()` and `set_shared_secret()` to `src/vault/client.py` — write-only path used exclusively by onboarding; read-only in all other contexts
+- [ ] **AM-113** — Wire `needs_onboarding()` into `src/gateway/intent_router.py` — check before every incoming message dispatch; route to `handle_onboarding_message()` instead of agent layer if onboarding is incomplete
+
 ### Week 3 — Heartbeats, Tool Layer, and Remaining Agents
 
 Goal: Agents running on schedules without human trigger. Full tool layer with custom adapter live. SKILLS.md written.

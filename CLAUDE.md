@@ -86,10 +86,11 @@ brandos/
 │   │   ├── routes/
 │   │   │   ├── whatsapp.py     # WhatsApp webhook handler
 │   │   │   ├── telegram.py     # Telegram webhook handler
+│   │   │   ├── onboarding.py   # Onboarding wizard HTTP handler + DB helpers + channel formatter
 │   │   │   └── vapi.py         # Voice webhook handler (Phase 2)
 │   │   ├── auth.py             # API key validation, rate limiting
 │   │   ├── sanitizer.py        # Prompt injection sanitizer
-│   │   └── intent_router.py    # Routes intent → brand → agent → task
+│   │   └── intent_router.py    # Routes intent → brand → agent → task (checks needs_onboarding first)
 │   ├── core/                   # Layer 3: Orchestration (BrandOS Core)
 │   │   ├── __init__.py
 │   │   ├── company_registry.py # Brand CRUD, isolation boundaries
@@ -101,7 +102,8 @@ brandos/
 │   │   ├── audit_log.py        # Immutable Postgres audit log
 │   │   ├── ticket_system.py    # Threaded conversation/decision tracking
 │   │   ├── governance.py       # Approve, override, pause, rollback
-│   │   └── orchestrator.py     # Multi-agent workflow engine (step sequencing, data passing)
+│   │   ├── orchestrator.py     # Multi-agent workflow engine (step sequencing, data passing)
+│   │   └── onboarding.py       # Conversational setup wizard state machine (30+ steps, no LLM)
 │   ├── vault/                  # Layer 4: Secret Vault
 │   │   ├── __init__.py
 │   │   ├── client.py           # Infisical SDK wrapper

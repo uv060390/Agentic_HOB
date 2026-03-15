@@ -159,3 +159,22 @@ class WorkflowError(BrandOSError):
 
 class CreativeLibraryError(BrandOSError):
     """Raised when Creative Library read/write fails."""
+
+
+# ── Onboarding ────────────────────────────────────────────────────────────────
+
+
+class OnboardingError(BrandOSError):
+    """Raised for invalid onboarding state transitions or missing step definitions."""
+
+
+class StepValidationError(BrandOSError):
+    """
+    Raised by validators in onboarding.py when a key or URL fails its test call.
+    Distinct from InjectionDetectedError — this is a credential or config failure,
+    not a security event.
+    """
+
+    def __init__(self, step_id: str, detail: str) -> None:
+        self.step_id = step_id
+        super().__init__(f"Step '{step_id}' validation failed: {detail}")
