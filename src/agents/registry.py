@@ -13,6 +13,7 @@ from src.agents.templates.finance import FinanceAgent
 from src.agents.specialists.data_scientist import DataScientistAgent
 from src.agents.specialists.engineer import EngineerAgent
 from src.agents.specialists.data_analyst import DataAnalystAgent
+from src.agents.specialists.optimizer import OptimizerAgent
 
 _TEMPLATE_REGISTRY: dict[str, type[BaseAgent]] = {
     "ceo": CEOAgent,
@@ -20,6 +21,7 @@ _TEMPLATE_REGISTRY: dict[str, type[BaseAgent]] = {
     "data_scientist": DataScientistAgent,
     "engineer": EngineerAgent,
     "data_analyst": DataAnalystAgent,
+    "optimizer": OptimizerAgent,
 }
 
 

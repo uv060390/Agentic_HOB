@@ -7,6 +7,7 @@ from __future__ import annotations
 import logging
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
+from typing import Any
 from src.shared.schemas import AgentTask, AgentResult, AgentReport
 
 logger = logging.getLogger(__name__)
@@ -38,3 +39,25 @@ class BaseAgent(ABC):
 
     def _mark_run(self) -> None:
         self._last_run_at = datetime.now(timezone.utc).isoformat()
+
+    async def delegate(
+        self,
+        task_subtype: str,
+        target_agent_template: str,
+        context: dict[str, Any] | None = None,
+    ) -> "AgentResult":
+        """
+        Delegate a sub-task to another agent.
+
+        Agents must never call each other directly — always use delegate().
+        Brand isolation is preserved: company_id is always self.company_id.
+        The delegated agent writes its own audit entries.
+        """
+        from src.agents.registry import get_agent_instance  # avoid circular import
+
+        agent = await get_agent_instance(target_agent_template, self.company_id)
+        task = AgentTask(
+            task_subtype=task_subtype,
+            context=context or {},
+        )
+        return await agent.run(task)

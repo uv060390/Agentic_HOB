@@ -90,39 +90,43 @@ Naming convention: `{brand_slug}-{role}` (e.g. `aim-ceo`, `lembasmax-finance`).
 - **File:** `src/agents/templates/scout.py`
 - **Role:** Competitor intelligence, market trend monitoring, new product opportunity identification. Feeds insights to CEO and CMO.
 - **Model tier:** `batch`
-- **Tools:** `meta_ads` (Ad Library), `d2c_benchmarks`, `ticket_system`, `audit_log`
+- **Tools:** `meta_ads` (Ad Library), `apify_fb_ads` (custom adapter), `d2c_benchmarks`, `ticket_system`, `audit_log`
 - **Heartbeat:** Bi-weekly, Wednesday 10:00 AM IST (`0 10 * * 3/2`)
 - **Reports to:** `aim-ceo`
 - **Key tasks:**
-  - `competitor_scan` — scrape Meta Ad Library for competitor creative patterns
+  - `competitor_scan` — scrape Meta Ad Library for competitor creative patterns; save raw creative metadata to Creative Library via `google_drive.save_creative(source="competitor")`
   - `market_trends` — pull D2C benchmark data, flag category shifts
   - `opportunity_brief` — surface white-space product opportunities
+- **Workflow trigger:** On CTR drop >15% or creative staleness flag, triggers `creative_optimisation` workflow via `self.delegate("trigger_workflow", "optimizer", context)`
 
 ### Creative (`creative`)
 
 - **File:** `src/agents/templates/creative.py`
 - **Role:** Ad creative generation (copy + brief), landing page prompts for Lovable, product description writing. Executes CMO's creative direction.
 - **Model tier:** `creative`
-- **Tools:** `meta_ads`, `lovable_shopify`, `lovable_prompt_builder`, `ticket_system`, `audit_log`
+- **Tools:** `meta_ads`, `lovable_shopify`, `lovable_prompt_builder`, `google_drive`, `ticket_system`, `audit_log`
 - **Heartbeat:** As needed (triggered by CMO tickets)
 - **Reports to:** `aim-cmo`
 - **Key tasks:**
-  - `generate_ad_copy` — write Meta/Google ad variations
+  - `generate_ad_copy` — write Meta/Google ad variations; save output to Creative Library with `source="original"`
   - `build_landing_page` — use Lovable to generate Shopify landing pages
   - `product_description` — SEO-optimised product copy
+  - `replicate_top_ads` — fetch top competitor creatives from Creative Library via `google_drive.get_top_creatives(sort_by="predicted_ctr")`, generate brand-adapted structural replicas (same layout/hook, swapped brand colours and product images); save to Creative Library with `source="replicated"`
+- **Rule:** Every creative output MUST be saved to the Creative Library before the task returns. Unsaved output is lost signal.
 
 ### Performance (`performance`)
 
 - **File:** `src/agents/templates/performance.py`
-- **Role:** Paid media execution — Meta, Google, Amazon Ads. Campaign optimisation, bid management, budget pacing. Raises CAC/ROAS anomaly tickets.
+- **Role:** Paid media execution — Meta, Google, Amazon Ads. Campaign optimisation, bid management, budget pacing. Raises CAC/ROAS anomaly tickets. Closes the Creative Library feedback loop by writing actual CTR back to `creative_library`.
 - **Model tier:** `creative` (analysis) / `batch` (bid classification)
-- **Tools:** `meta_ads`, `google_ads`, `amazon_ads`, `ticket_system`, `audit_log`
+- **Tools:** `meta_ads`, `google_ads`, `amazon_ads`, `google_drive`, `ticket_system`, `audit_log`
 - **Heartbeat:** Daily, 7:00 AM IST (`0 7 * * *`)
 - **Reports to:** `aim-cmo`
 - **Key tasks:**
   - `daily_performance_check` — review ROAS, CAC, spend pacing
   - `optimise_bids` — adjust bids based on performance data
   - `anomaly_alert` — create escalation ticket if KPI breach detected
+  - `update_creative_ctr` — after each campaign flight, look up `creative_id` from Creative Library by ad name/label, call `google_drive.update_actual_ctr(creative_id, actual_ctr)` to close prediction vs. reality loop
 
 ### Ops (`ops`)
 
@@ -231,6 +235,26 @@ All specialists write to the same audit log, ticket system, and Supabase as stan
 - **Typical duration:** 2–4 weeks
 - **Note:** AEO/GEO calls use `src/tools/llm_as_tool/chatgpt.py` and `perplexity.py` — NOT the model router. These are tool invocations checking brand presence, not agent reasoning.
 
+### Optimizer (`optimizer`)
+
+- **File:** `src/agents/specialists/optimizer.py`
+- **Class:** `OptimizerAgent`
+- **Role:** Meta-specialist that orchestrates multi-agent improvement loops. Sets a measurable quality objective, triggers a registered workflow, evaluates the output with an LLM judge (YES/NO), and either iterates or declares success and winds down. Does not produce creative or analytical output directly — it coordinates agents that do.
+- **Model tier:** `strategy`
+- **Tools:** `supabase_client`, `ticket_system`, `audit_log`
+- **Typical hire triggers:**
+  - CTR on active ad creatives drops >15% vs. 30-day moving average
+  - Creative agent output quality flagged as poor by CMO review
+  - New competitor creative pattern detected by Scout that warrants replication
+- **Key tasks:**
+  - `set_objective` — define the quality target (e.g. "replicated creatives must have predicted CTR ≥ top 20% of Creative Library")
+  - `trigger_workflow` — launch `creative_optimisation` or `competitor_intelligence` workflow via `orchestrator.run_workflow()`
+  - `evaluate_quality` — LLM-judge the workflow output against the objective; returns YES (success) or NO (iterate)
+  - `iterate_or_complete` — if quality not met and budget remains, re-trigger specific steps; if met or budget exhausted, close ticket and wind down
+- **Typical duration:** 1–2 weeks
+- **Success criteria example:** "3+ replicated creatives with predicted CTR ≥ 2.5% saved to Creative Library"
+- **Note:** Optimizer does not bypass governance. It is a specialist — the hiring manager proposes it, the founder approves it, and it has its own budget allocation from the specialist reserve.
+
 ### Growth Hacker (`growth_hacker`)
 
 - **File:** `src/agents/specialists/growth_hacker.py`
@@ -269,6 +293,11 @@ On-demand (when active):
     AIM CEO → Data Analyst (aim-data_analyst)
     AIM CMO → SEO/AEO Specialist (aim-seo_aeo)
     AIM CMO → Growth Hacker (aim-growth_hacker)
+    AIM CMO → Optimizer (aim-optimizer)
+      └── triggers: creative_optimisation workflow
+            ├── Engineer (aim-engineer)
+            ├── Data Scientist (aim-data_scientist)
+            └── Creative (aim-creative)
 ```
 
 ---
@@ -301,3 +330,84 @@ On-demand (when active):
 6. **Standing agents** use `task_type = "strategy"` or `"creative"` (never `"monitoring"` — that's heartbeat-only).
 7. **Specialist agents** track `_budget_spent` and report it in `report()`.
 8. **Tool access is database-driven.** `get_tools()` returns the list of permitted slugs; actual activation is checked against `tool_registry` table.
+9. **Never call another agent directly.** Use `self.delegate()` for single sub-tasks or `orchestrator.run_workflow()` for multi-step pipelines. Direct instantiation bypasses audit logging and budget enforcement.
+10. **Save all creative output to the Creative Library** before a task returns. Call `google_drive.save_creative()` with correct `source`, `metadata`, and `workflow_run_id`. Unsaved output cannot feed the performance feedback loop.
+
+---
+
+## How Agent Communication Works
+
+Agents never import or instantiate each other directly. All inter-agent communication goes through one of two paths:
+
+### 1. Registered Workflow (multi-step pipeline)
+
+```python
+# Inside OptimizerAgent.trigger_workflow()
+from src.core import orchestrator
+
+result = await orchestrator.run_workflow(
+    workflow_name="creative_optimisation",
+    company_slug=self.company_slug,
+    initial_context={"objective": self.objective},
+    db=db,
+)
+```
+
+The orchestrator resolves each step's agent from the registry, calls `agent.run(task)`, and passes `prev_output` forward. Full run is persisted to `workflow_run` / `workflow_step` tables.
+
+### 2. Ad-hoc Delegation (single sub-task)
+
+```python
+# Inside ScoutAgent.competitor_scan()
+result = await self.delegate(
+    task_subtype="rank_creatives",
+    target_agent_template="data_scientist",
+    context={"raw_creatives": scraped_data},
+)
+```
+
+`BaseAgent.delegate()` resolves the target agent from the registry (same `company_id`), runs it, and returns the `AgentResult`. Brand isolation is always preserved — delegation across brands raises `BrandIsolationError`.
+
+### When to use which
+
+| Scenario | Use |
+|---|---|
+| Ordered pipeline where step N depends on step N-1 | `orchestrator.run_workflow()` |
+| One agent needs a single answer from another | `self.delegate()` |
+| Standing agent triggering a specialist | `self.delegate()` or hiring manager + governance |
+| Founder asking "how are creatives doing?" | Intent router → CEO agent → `daily_performance_check` (no workflow needed) |
+
+---
+
+## Workflow Catalogue
+
+Registered in `src/core/orchestrator.py` under `WORKFLOW_REGISTRY`.
+
+### `creative_optimisation`
+
+**Trigger:** Scout detects CTR drop >15% or creative staleness. Optimizer specialist hired by hiring manager.
+
+| Step | Agent | Task | Output passed forward |
+|---|---|---|---|
+| 1 | `engineer` | `build_scraper` | Scraped competitor ad URLs + metadata |
+| 2 | `data_scientist` | `rank_creatives` | Ranked list with `predicted_ctr` scores |
+| 3 | `creative` | `replicate_top_ads` | Replicated ad copy + brief, saved to Creative Library |
+| 4 | `optimizer` | `evaluate_quality` | YES/NO quality verdict + iteration decision |
+
+**Success condition:** ≥3 replicated creatives with `predicted_ctr` ≥ top-20% Creative Library threshold.
+
+**Feedback loop:** Performance agent's `update_creative_ctr` task retroactively writes `actual_ctr` to Creative Library entries after each campaign flight, improving future `rank_creatives` predictions.
+
+---
+
+### `competitor_intelligence`
+
+**Trigger:** CMO requests competitive brief or Scout flags new category entrant.
+
+| Step | Agent | Task | Output passed forward |
+|---|---|---|---|
+| 1 | `scout` | `competitor_scan` | Raw competitor creative + messaging data |
+| 2 | `data_analyst` | `attribution_analysis` | Channel attribution breakdown for competitor spend |
+| 3 | `cmo` | `campaign_brief` | Structured brief ready for Creative and Performance agents |
+
+**Success condition:** Campaign brief created and linked to a ticket; Creative agent picks it up in next heartbeat.
