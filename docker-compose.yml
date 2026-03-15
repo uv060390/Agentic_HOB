@@ -1,0 +1,106 @@
+version: "3.9"
+
+# ─── BrandOS local development stack ──────────────────────────────────────────
+# Services: PostgreSQL 15, Infisical (self-hosted), Gateway
+# Usage: docker-compose up -d
+# ──────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  # ── Primary database (audit log, org structure, tickets) ──────────────────
+  postgres:
+    image: postgres:15-alpine
+    container_name: brandos_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: brandos
+      POSTGRES_PASSWORD: brandos_dev
+      POSTGRES_DB: brandos
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U brandos -d brandos"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ── Secret vault (Infisical self-hosted) ──────────────────────────────────
+  infisical:
+    image: infisical/infisical:latest
+    container_name: brandos_infisical
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Infisical uses its own Postgres instance for secrets data
+      DB_CONNECTION_URI: postgresql://brandos:brandos_dev@postgres:5432/infisical
+      ENCRYPTION_KEY: "a".repeat(32)  # REPLACE with 32-char random string in production
+      AUTH_SECRET: "brandos_infisical_auth_secret"  # REPLACE in production
+      SITE_URL: "http://localhost:8080"
+      REDIS_URL: "redis://redis:6379"
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/healthcheck"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # ── Redis (required by Infisical) ─────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: brandos_redis
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Gateway (FastAPI) ─────────────────────────────────────────────────────
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    container_name: brandos_gateway
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      infisical:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      BRANDOS_DB_URL: postgresql+psycopg://brandos:brandos_dev@postgres:5432/brandos
+      INFISICAL_HOST: http://infisical:8080
+      BRANDOS_ENV: development
+      LOG_LEVEL: DEBUG
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount source for hot-reload in dev
+      - ./src:/app/src:ro
+    command: ["uvicorn", "src.gateway.app:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  default:
+    name: brandos_network
