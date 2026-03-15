@@ -1,2 +1,2 @@
-# Agentic_Marketing
-A platform to hire specialised AI Agents for each category in D2C Marketing
+# Agentic_HOB
+An autonomous agentic House of Brands system to sytematically build, launch, and scale D2C Brands
